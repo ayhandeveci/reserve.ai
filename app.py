@@ -1,4 +1,3 @@
-
 import json
 import os
 import streamlit as st
@@ -28,7 +27,7 @@ with st.sidebar:
 st.header("Tur 1 — Analiz (Kümülatif Gerçekleşen)")
 active_1 = section_toggle("tur1_active", label="Tur 1 Aktif mi?")
 if active_1:
-    col1, col2 = st.columns([2,1])
+    col1, col2 = st.columns([2, 1])
     with col1:
         src = st.radio("Veri kaynağı", ["CSV yükle", "Örnek veriyi kullan"], horizontal=True, key="tur1_src")
         if src == "CSV yükle":
@@ -55,21 +54,32 @@ if active_1:
 
     if run_btn:
         with st.spinner("Tur-1: EDA çalışıyor..."):
-            eda_result = run_basic_eda(st.session_state["tur1_df_norm"])
-            # GPT'ye kısa bir özetletme (opsiyonel); ana çıktı yine de EDA sözlüğü
+            df_norm = st.session_state["tur1_df_norm"]
+            eda_result = run_basic_eda(df_norm)
+            # GPT'ye kısa özet (opsiyonel)
             prompt = prompt_tur1(eda_result)
             llm_summary = None
             if api_key:
                 llm_summary = call_llm(api_key, model, prompt)
             payload = {"eda": eda_result, "llm_summary": llm_summary}
             st.session_state["tur1_out"] = payload
-            st.success("Tur-1 tamamlandı ve çıktı kaydedildi.")
+
+            # EXCEL RAPORU OLUŞTUR & İNDİR
+            xls = export_tur1_excel(df_norm, build_tur1_summary(df_norm))
+            st.session_state["tur1_excel_bytes"] = xls.getvalue()
+            st.success("Tur-1 tamamlandı. Excel raporu hazır.")
+            st.download_button(
+                "Tur-1 Excel Raporunu İndir",
+                data=xls.getvalue(),
+                file_name="reserveai_tur1_summary.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
             with st.expander("Tur-1 Çıktısı (JSON)", expanded=False):
                 st.json(payload)
 
 else:
     # Section kapandı -> ilgili bilgileri sil
-    secure_delete(["tur1_api", "tur1_out", "tur1_df_norm", "tur1_file"])
+    secure_delete(["tur1_api", "tur1_out", "tur1_df_norm", "tur1_file", "tur1_excel_bytes"])
 
 st.divider()
 
@@ -81,30 +91,51 @@ if active_2:
         st.warning("Tur-2 için Tur-1 verisi ve çıktısı gerekli.")
         st.stop()
 
-    col1, col2 = st.columns([2,1])
+    col1, col2 = st.columns([2, 1])
     with col1:
-        st.write("Tur-1 EDA özetine ve **orijinal normalize veri**ye bakarak veri kalitesi, segmentasyon ve ek alan/özellik önerilerini üret.")
+        st.write("Tur-1 Excel özetini yükle ve orijinal normalize veri ile outlier analiz planını oluştur.")
+        # Tur-1 Excel geri yükleme
+        tur1_excel_summary = None
+        up_xls = st.file_uploader("Tur-1 Excel (reserveai_tur1_summary.xlsx)", type=["xlsx"], key="tur2_xls")
+        if up_xls is not None:
+            try:
+                x = pd.read_excel(up_xls, sheet_name=None)
+                shape = x.get("Summary")
+                cols = x.get("Columns")
+                sums = x.get("NumericSums")
+                segs = x.get("Segments")
+                ata = x.get("AgeToAge")
+                tur1_excel_summary = {
+                    "shape": shape.to_dict(orient="records")[0] if shape is not None and len(shape) else {},
+                    "columns": cols.to_dict(orient="records") if cols is not None else [],
+                    "numeric_sums": sums.to_dict(orient="records") if sums is not None else [],
+                    "segments": segs.to_dict(orient="records") if segs is not None else [],
+                    "age_to_age": ata.to_dict(orient="records") if ata is not None else [],
+                }
+            except Exception as e:
+                st.error(f"Excel okuma hatası: {e}")
+
         with st.expander("Tur-1 EDA Özeti", expanded=False):
             st.json(st.session_state["tur1_out"]["eda"])
 
     with col2:
         api_key2 = st.text_input("OpenAI API Key (Tur 2)", type="password", key="tur2_api")
-        model2 = st.text_input("Model", value=st.session_state.get("tur1_model","gpt-5.1-mini"), key="tur2_model")
+        model2 = st.text_input("Model", value=st.session_state.get("tur1_model", "gpt-5.1-mini"), key="tur2_model")
         run2 = st.button("Tur 2 — Önerileri üret", use_container_width=True)
 
     if run2:
         with st.spinner("Tur-2: Öneriler hazırlanıyor..."):
             df_norm = st.session_state["tur1_df_norm"]
             excel_sum = tur1_excel_summary if tur1_excel_summary is not None else {"note": "excel not uploaded"}
-                prompt2 = prompt_tur2_from_excel(excel_sum, st.session_state["tur1_out"]["eda"])
+            prompt2 = prompt_tur2_from_excel(excel_sum, st.session_state["tur1_out"]["eda"])
             suggestions = None
             if api_key2:
                 suggestions = call_llm(api_key2, model2, prompt2)
-            # Eğer LLM kullanılmadıysa bile boş bir iskelet döndür
+            # Eğer LLM çağrısı yoksa demo iskeleti
             if not suggestions:
-                suggestions = {"notes": "LLM çağrısı yapılmadı; demo iskeleti.", "segments": [], "features": []}
-            # JSON doğrulama (yumuşak)
-            suggestions = validate_json_output(suggestions, expected_keys=["methods","thresholds","workflow","notes"])
+                suggestions = {"methods": [], "thresholds": [], "workflow": [], "notes": "LLM çağrısı yapılmadı; demo iskeleti."}
+            # JSON doğrulama
+            suggestions = validate_json_output(suggestions, expected_keys=["methods", "thresholds", "workflow", "notes"])
             st.session_state["tur2_out"] = suggestions
             st.success("Tur-2 tamamlandı ve çıktı kaydedildi.")
             with st.expander("Tur-2 Çıktısı (JSON)", expanded=False):
@@ -122,14 +153,14 @@ if active_3:
         st.warning("Tur-3 için Tur-1 verisi/çıktısı ve Tur-2 çıktısı gerekli.")
         st.stop()
 
-    col1, col2 = st.columns([2,1])
+    col1, col2 = st.columns([2, 1])
     with col1:
         st.write("Tur-1 & Tur-2 çıktıları ve normalize veri ile grafik üret.")
         with st.expander("Tur-1 & Tur-2 özetleri", expanded=False):
             st.json({"tur1": st.session_state["tur1_out"], "tur2": st.session_state["tur2_out"]})
     with col2:
         api_key3 = st.text_input("OpenAI API Key (Tur 3)", type="password", key="tur3_api")
-        model3 = st.text_input("Model", value=st.session_state.get("tur2_model","gpt-5.1-mini"), key="tur3_model")
+        model3 = st.text_input("Model", value=st.session_state.get("tur2_model", "gpt-5.1-mini"), key="tur3_model")
         run3 = st.button("Tur 3 — Görselleştir", use_container_width=True)
 
     if run3:
