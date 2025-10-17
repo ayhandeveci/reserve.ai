@@ -1,4 +1,3 @@
-
 import json
 
 def prompt_tur1(eda_result: dict) -> str:
@@ -11,33 +10,52 @@ def prompt_tur1(eda_result: dict) -> str:
     """
 
 def prompt_tur2_from_excel(excel_summary: dict, eda_result: dict) -> str:
+    # Açık ve seçilebilir bir öneri istiyoruz: top_recommendation zorunlu
     return f"""
-    You are an actuarial data QA consultant. Given the dataset summary (from an Excel produced in Turn-1)
-    and the initial EDA, propose an OUTLIER analysis plan specifically for cumulative claims triangles.
-    Cover:
-    - pointwise outliers on incremental amounts (IQR/Tukey, z-score, robust MAD),
-    - outliers on age-to-age factors (IQR and robust methods),
-    - EVT/POT with Hill estimator for heavy tails (outline steps, threshold selection, diagnostics),
-    - time-dependence checks (AY/devQ structure),
-    - practical thresholds and step-by-step workflow.
-    Output JSON with keys: methods[], thresholds[], workflow[], notes.
+    You are an actuarial data QA consultant. Given the Turn-1 dataset summary (from Excel) and EDA,
+    propose an OUTLIER analysis plan for cumulative claims triangles.
+
+    Cover methods (with when to use and parameter hints):
+      - IQR/Tukey (on incremental losses and on age-to-age factors),
+      - z-score / robust MAD,
+      - EVT (POT) with Hill estimator (outline thresholding and diagnostics).
+
+    Return STRICT JSON with keys:
+    {{
+      "top_recommendation": {{
+        "method": "<short name>",
+        "why": "<1-2 sentences>",
+        "when_to_use": "<conditions>",
+        "parameters": [{{"name":"param","hint":"how to choose"}}, ...]
+      }},
+      "alternatives": [{{"method":"...", "why":"..."}}, ...],
+      "workflow": ["step 1", "step 2", "..."],
+      "notes": "<free text>"
+    }}
+
     EXCEL_SUMMARY_JSON: {json.dumps(excel_summary, ensure_ascii=False)}
     EDA_JSON: {json.dumps(eda_result, ensure_ascii=False)}
     """
 
 def prompt_tur3(df_norm, tur1_out, tur2_out) -> str:
-    sample = df_norm.head(50).to_dict(orient="records")
+    # Tur-3: anlatımı zenginleştirmek için kısa plan istiyoruz
+    sample = df_norm.head(40).to_dict(orient="records")
     return f"""
-    You are an actuarial analyst. From the suggested methods decide ONE applicable analysis and
-    produce a short plan (<=120 words) for visuals and interpretation. Prefer an analysis that can
-    be computed locally (e.g., IQR on age-to-age or incremental). Return JSON:
+    You are an actuarial analyst. Using the Turn-2 recommendation, choose ONE method (prefer the 'top_recommendation')
+    and produce a concise narrative (<=120 words) including:
+    - chosen_method,
+    - reason,
+    - what the charts show,
+    - how to interpret flags and next actions.
+
+    Return JSON:
     {{
       "chosen_method": "<name>",
       "reason": "<short>",
-      "visuals": ["<chart suggestion>", "..."],
-      "interpretation_focus": ["<bullets>"]
+      "narrative": "<<=120 words>"
     }}
-    CONTEXT_TUR1={json.dumps(tur1_out, ensure_ascii=False)}
-    CONTEXT_TUR2={json.dumps(tur2_out, ensure_ascii=False)}
+
+    TUR1={json.dumps(tur1_out, ensure_ascii=False)}
+    TUR2={json.dumps(tur2_out, ensure_ascii=False)}
     SAMPLE_ROWS={json.dumps(sample, ensure_ascii=False)}
     """
